@@ -1,73 +1,31 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Runtime.InteropServices;
+
 using System.Text;
 
 static class PicoOath
 {
-    [DllImport("winscard.dll")] static extern int SCardEstablishContext(uint scope, IntPtr a, IntPtr b, out IntPtr context);
-    [DllImport("winscard.dll")] static extern int SCardReleaseContext(IntPtr context);
-    [DllImport("winscard.dll", CharSet=CharSet.Unicode)] static extern int SCardListReaders(IntPtr context, string groups, char[] readers, ref uint count);
-    [DllImport("winscard.dll", CharSet=CharSet.Unicode)] static extern int SCardConnect(IntPtr context, string reader, uint share, uint protocols, out IntPtr card, out uint protocol);
-    [DllImport("winscard.dll")] static extern int SCardDisconnect(IntPtr card, uint disposition);
-    [StructLayout(LayoutKind.Sequential)] struct IoRequest { public uint Protocol; public uint Length; }
-    [DllImport("winscard.dll")] static extern int SCardTransmit(IntPtr card, ref IoRequest pci, byte[] message, uint length, IntPtr receivePci, byte[] response, ref uint responseLength);
-
-    static void Check(int result)
-    {
-        if (result != 0) throw new InvalidOperationException("Erro do leitor de cartão: " + result.ToString("X8"));
-    }
-
-    static byte[] Send(IntPtr card, uint protocol, params byte[] command)
-    {
-        var pci = new IoRequest { Protocol = protocol, Length = 8 };
-        var response = new byte[4096];
-        uint size = (uint)response.Length;
-        Check(SCardTransmit(card, ref pci, command, (uint)command.Length, IntPtr.Zero, response, ref size));
-        if (size < 2) throw new InvalidOperationException("Resposta OATH incompleta.");
-        return response.Take((int)size).ToArray();
-    }
-
     static string Access(Func<IntPtr, uint, byte[], string> action)
     {
-        IntPtr context;
-        Check(SCardEstablishContext(0, IntPtr.Zero, IntPtr.Zero, out context));
-        try
-        {
-            uint count = 0;
-            Check(SCardListReaders(context, null, null, ref count));
-            var names = new char[count];
-            Check(SCardListReaders(context, null, names, ref count));
-            var readers = new string(names).Split('\0').Where(n =>
-                n.IndexOf("Pico Key CCID", StringComparison.OrdinalIgnoreCase) >= 0).ToArray();
-            if (readers.Length != 1)
-                throw new InvalidOperationException("Conecte exatamente uma PicoKey com interface CCID.");
-            IntPtr card;
-            uint protocol;
-            Check(SCardConnect(context, readers[0], 1, 3, out card, out protocol));
-            try
+        return PicoCard.Open((card, protocol) => {
+            var selected = PicoCard.Send(card, protocol, 0, 0xA4, 4, 0, 7, 0xA0, 0, 0, 5, 0x27, 0x21, 1);
+            if (selected[selected.Length - 2] != 0x90 || selected[selected.Length - 1] != 0)
+                throw new InvalidOperationException("A Pico recusou a seleção do aplicativo OATH.");
+            var data = new List<byte>();
+            var reply = PicoCard.Send(card, protocol, 0, 0xA1, 0, 0);
+            for (int page = 0; page < 64; page++)
             {
-                var selected = Send(card, protocol, 0, 0xA4, 4, 0, 7, 0xA0, 0, 0, 5, 0x27, 0x21, 1);
-                if (selected[selected.Length - 2] != 0x90 || selected[selected.Length - 1] != 0)
-                    throw new InvalidOperationException("A Pico recusou a seleção do aplicativo OATH.");
-                var data = new List<byte>();
-                var reply = Send(card, protocol, 0, 0xA1, 0, 0);
-                for (int page = 0; page < 64; page++)
-                {
-                    int end = reply.Length - 2;
-                    data.AddRange(reply.Take(end));
-                    if (reply[end] == 0x90 && reply[end + 1] == 0)
-                        return action(card, protocol, data.ToArray());
-                    if (reply[end] != 0x61)
-                        throw new InvalidOperationException(string.Format("A Pico recusou a listagem OATH ({0:X2}{1:X2}).", reply[end], reply[end+1]));
-                    reply = Send(card, protocol, 0, 0xA5, 0, 0);
-                }
-                throw new InvalidOperationException("A listagem OATH excedeu o limite de páginas.");
+                int end = reply.Length - 2;
+                data.AddRange(reply.Take(end));
+                if (reply[end] == 0x90 && reply[end + 1] == 0)
+                    return action(card, protocol, data.ToArray());
+                if (reply[end] != 0x61)
+                    throw new InvalidOperationException(string.Format("A Pico recusou a listagem OATH ({0:X2}{1:X2}).", reply[end], reply[end+1]));
+                reply = PicoCard.Send(card, protocol, 0, 0xA5, 0, 0);
             }
-            finally { SCardDisconnect(card, 0); }
-        }
-        finally { SCardReleaseContext(context); }
+            throw new InvalidOperationException("A listagem OATH excedeu o limite de páginas.");
+        });
     }
 
     public static string ListAccounts()
@@ -106,7 +64,7 @@ static class PicoOath
                 Buffer.BlockCopy(key, 0, command, i + 4, key.Length);
                 try
                 {
-                    var reply = Send(card, protocol, command);
+                    var reply = PicoCard.Send(card, protocol, command);
                     int end = reply.Length - 2;
                     if (reply[end] != 0x90 || reply[end + 1] != 0)
                         throw new InvalidOperationException(string.Format("A Pico recusou o cadastro ({0:X2}{1:X2}).", reply[end], reply[end + 1]));
@@ -142,7 +100,7 @@ static class PicoOath
             command.AddRange(name);
             command.AddRange(new byte[] { 0x74, 8 });
             command.AddRange(counter);
-            byte[] reply = Send(card, protocol, command.ToArray());
+            byte[] reply = PicoCard.Send(card, protocol, command.ToArray());
             if (reply.Length != 9 || reply[0] != 0x76 || reply[1] != 5 ||
                 reply[2] < 6 || reply[2] > 8 || reply[7] != 0x90 || reply[8] != 0)
                 throw new InvalidOperationException("A Pico não retornou um código TOTP. A conta pode exigir confirmação física ou autenticação.");

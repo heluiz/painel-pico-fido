@@ -26,7 +26,15 @@ static class PicoPanel
                 }
             }
         }
-        if (devices == 0) return "Nenhuma Pico FIDO detectada. Conecte a placa por USB.";
+                if (devices == 0)
+        {
+            try
+            {
+                PicoSettings.Configuration();
+                return "Pico FIDO detectada via leitor CCID. Confira o VID/PID na aba LED e USB.";
+            }
+            catch (InvalidOperationException) { return "Nenhuma Pico FIDO detectada. Conecte a placa por USB."; }
+        }
         if (ready == 0) return "Pico detectada, mas o Windows informou um erro no dispositivo.";
         return ready == 1 ? "Interface FIDO da Pico reconhecida pelo Windows." :
             ready + " interfaces FIDO Pico encontradas. Deixe conectada apenas a chave desejada.";
@@ -96,12 +104,25 @@ static class PicoPanel
             catch (InvalidOperationException error) { File.WriteAllText(args[1], error.Message); Environment.ExitCode = 1; }
             return;
         }
+        if (args.Length == 2 && args[0] == "--hardware")
+        {
+            try
+            {
+                var options = PicoSettings.Configuration();
+                var slots = PicoSettings.Slots();
+                File.WriteAllText(args[1], PicoSettings.SecurityStatus() + Environment.NewLine +
+                    "Campos da placa: " + options.Count + Environment.NewLine +
+                    "Slots: " + string.Join(", ", Array.ConvertAll(slots, v => v ? "ocupado" : "livre")));
+            }
+            catch (InvalidOperationException error) { File.WriteAllText(args[1], error.Message); Environment.ExitCode = 1; }
+            return;
+        }
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
         using (var form = new Form())
         {
             form.Text = "Painel Pico FIDO";
-            form.ClientSize = new Size(600, 530);
+            form.ClientSize = new Size(760, 680);
             form.MinimumSize = new Size(560, 320);
             form.StartPosition = FormStartPosition.CenterScreen;
             form.Font = new Font("Segoe UI", 11);
@@ -109,11 +130,11 @@ static class PicoPanel
                 Dock = DockStyle.Fill, Padding = new Padding(20),
                 FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true
             };
-            var status = new Label { Width = 480, Height = 52, AccessibleName = "Estado do dispositivo" };
+            var status = new Label { Width = 620, Height = 52, AccessibleName = "Estado do dispositivo" };
             var refresh = new Button { Text = "Verificar conexão USB", AutoSize = true };
             var manage = new Button { Text = "Abrir configurações do PIN", AutoSize = true };
             var help = new Label {
-                Width = 480, Height = 100, Padding = new Padding(0, 10, 0, 0),
+                Width = 620, Height = 90, Padding = new Padding(0, 10, 0, 0),
                 Text = "No Windows, abra Chave de segurança → Gerenciar e siga as instruções na tela. " +
                     "Use a opção de adicionar ou alterar o PIN. Redefinir a chave apaga as credenciais armazenadas."
             };
@@ -167,7 +188,7 @@ static class PicoPanel
                     var fields = new FlowLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(12), FlowDirection = FlowDirection.TopDown, WrapContents = false };
                     fields.Controls.AddRange(new Control[] { new Label { Text = "Nome da conta", AutoSize = true }, label, new Label { Text = "Chave Base32 fornecida pelo serviço", AutoSize = true }, secret, save });
                     dialog.Controls.Add(fields);
-                    dialog.AcceptButton = save;
+                    dialog.AcceptButton = save; Neon.Style(dialog);
                     if (dialog.ShowDialog(form) != DialogResult.OK) return;
                     try { MessageBox.Show(form, PicoOath.AddTotp(label.Text, secret.Text), "Cadastro OATH"); }
                     catch (InvalidOperationException error) { MessageBox.Show(form, error.Message, "Cadastro OATH"); }
@@ -191,7 +212,7 @@ static class PicoPanel
                         picker.Items.AddRange(accounts);
                         picker.SelectedIndex = 0;
                         dialog.Controls.AddRange(new Control[] { picker, show });
-                        dialog.AcceptButton = show;
+                        dialog.AcceptButton = show; Neon.Style(dialog);
                         if (dialog.ShowDialog(form) == DialogResult.OK)
                             MessageBox.Show(form, PicoOath.CurrentCode((string)picker.SelectedItem), "Código TOTP");
                     }
@@ -199,9 +220,45 @@ static class PicoPanel
                 catch (InvalidOperationException error) { MessageBox.Show(form, error.Message, "Gerar código"); }
             };
             panel.Controls.AddRange(new Control[] { status, refresh, generate, addTotp, oath, manage, chrome, usb, verify, help });
-            form.Controls.Add(panel);
+            var tabs = new TabControl {
+                Dock = DockStyle.Fill, DrawMode = TabDrawMode.OwnerDrawFixed,
+                SizeMode = TabSizeMode.Fixed, ItemSize = new Size(150, 40)
+            };
+            tabs.DrawItem += Neon.DrawTab;
+            var daily = new TabPage("Chave e contas");
+            var device = new TabPage("LED e USB");
+            var slots = new TabPage("Slots OTP");
+            var advanced = new TabPage("Avançado");
+            daily.Controls.Add(panel);
+            device.Controls.Add(HardwareViews.Device(form));
+            slots.Controls.Add(HardwareViews.Slots(form));
+            advanced.Controls.Add(HardwareViews.Advanced(form));
+            tabs.TabPages.AddRange(new[] { daily, device, slots, advanced });
+
+            var heading = new Label {
+                Dock = DockStyle.Top, Height = 62, Text = "PICO FIDO",
+                Padding = new Padding(23, 0, 0, 0), TextAlign = ContentAlignment.MiddleLeft,
+                Font = new Font("Consolas", 24, FontStyle.Bold)
+            };
+            form.Controls.Add(tabs);
+            form.Controls.Add(heading);
+            Neon.Style(form);
+            heading.ForeColor = Neon.Cyan;
+            heading.BackColor = Color.FromArgb(22, 14, 42);
             form.Shown += (sender, e) => update();
-            Application.Run(form);
+            if (args.Length == 1 && args[0] == "--smoke-ui")
+            {
+                using (var timer = new Timer { Interval = 200 })
+                {
+                    timer.Tick += (sender, e) => {
+                        if (tabs.SelectedIndex == tabs.TabCount - 1) form.Close();
+                        else tabs.SelectedIndex++;
+                    };
+                    form.Shown += (sender, e) => timer.Start();
+                    Application.Run(form);
+                }
+            }
+            else Application.Run(form);
         }
     }
 }
