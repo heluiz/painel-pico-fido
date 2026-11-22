@@ -1,6 +1,6 @@
 # Painel Pico FIDO
 
-Painel Windows com visual neon para Raspberry Pi Pico 2 com Pico FIDO 8.0.
+Painel Windows com tema verde de alto contraste para Raspberry Pi Pico 2 com Pico FIDO 8.0.
 
 - **Chave e contas**: diagnóstico USB, PIN, credenciais FIDO, contas OATH e códigos TOTP.
 - **LED e USB**: modo do LED, nome USB, VID/PID, interface de teclado e curva secp256k1. Brilho ajustável somente com driver WS2812 ativo.

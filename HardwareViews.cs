@@ -9,30 +9,39 @@ using System.Windows.Forms;
 
 static class Neon
 {
-    internal static readonly Color Background = Color.FromArgb(12, 10, 25);
-    static readonly Color Surface = Color.FromArgb(27, 21, 48);
-    static readonly Color Text = Color.FromArgb(234, 232, 255);
-    internal static readonly Color Cyan = Color.FromArgb(82, 249, 237);
-    static readonly Color Pink = Color.FromArgb(255, 105, 214);
+    internal static readonly Color Background = Color.FromArgb(10, 20, 15);
+    internal static readonly Color Surface = Color.FromArgb(23, 43, 32);
+    internal static readonly Color Text = Color.FromArgb(241, 249, 244);
+    internal static readonly Color Accent = Color.FromArgb(147, 250, 185);
+    internal static readonly Color Muted = Color.FromArgb(192, 214, 201);
+    static readonly Color InactiveInput = Color.FromArgb(222, 237, 228);
+    static readonly Color TabMarker = Color.FromArgb(67, 221, 128);
 
     internal static void Style(Control root)
     {
         root.BackColor = Background;
-        root.ForeColor = Text;
+        root.ForeColor = Equals(root.Tag, "section-heading") ? Accent : Text;
         foreach (Control control in root.Controls) Style(control);
         var button = root as Button;
         if (button != null)
         {
             button.BackColor = Surface;
-            button.ForeColor = Cyan;
+            button.ForeColor = Accent;
             button.FlatStyle = FlatStyle.Flat;
-            button.FlatAppearance.BorderColor = Color.FromArgb(49, 132, 146);
-            button.FlatAppearance.MouseOverBackColor = Color.FromArgb(47, 29, 73);
+            button.FlatAppearance.BorderColor = Color.FromArgb(83, 153, 106);
+            button.FlatAppearance.MouseOverBackColor = Color.FromArgb(36, 65, 47);
             button.Padding = new Padding(8, 4, 8, 4);
             button.MinimumSize = new Size(0, 34);
         }
-        if (root is TextBoxBase || root is ComboBox || root is NumericUpDown)
-            root.BackColor = Surface;
+        if (root is TextBoxBase || root is NumericUpDown)
+        {
+            Action color = () => {
+                root.BackColor = root.Enabled ? Surface : InactiveInput;
+                root.ForeColor = root.Enabled ? Text : Background;
+            };
+            root.EnabledChanged += (sender, e) => color();
+            color();
+        }
     }
 
     internal static void DrawTab(object sender, DrawItemEventArgs e)
@@ -43,12 +52,118 @@ static class Neon
             e.Graphics.FillRectangle(brush, e.Bounds);
         if (active)
         {
-            using (var pen = new Pen(Pink, 3))
+            using (var pen = new Pen(TabMarker, 3))
                 e.Graphics.DrawLine(pen, e.Bounds.Left + 2, e.Bounds.Bottom - 2,
                     e.Bounds.Right - 2, e.Bounds.Bottom - 2);
         }
         TextRenderer.DrawText(e.Graphics, tabs.TabPages[e.Index].Text, tabs.Font, e.Bounds,
-            active ? Cyan : Text, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            active ? Accent : Text, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+    }
+}
+
+sealed class NeonLabel : Label
+{
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        if (Enabled)
+        {
+            base.OnPaint(e);
+            return;
+        }
+        TextRenderer.DrawText(e.Graphics, Text, Font, ClientRectangle, Neon.Muted,
+            TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
+    }
+}
+
+sealed class NeonCheckBox : CheckBox
+{
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        if (Enabled)
+        {
+            base.OnPaint(e);
+            return;
+        }
+        int side = Math.Max(13, (int)Math.Round(13 * e.Graphics.DpiX / 96));
+        var box = new Rectangle(1, (ClientSize.Height - side) / 2, side - 1, side - 1);
+        using (var pen = new Pen(Neon.Muted))
+        {
+            e.Graphics.DrawRectangle(pen, box);
+            if (Checked)
+                e.Graphics.DrawLines(pen, new[] { new Point(box.Left + 2, box.Top + side / 2),
+                    new Point(box.Left + side / 2 - 1, box.Bottom - 2), new Point(box.Right - 2, box.Top + 2) });
+        }
+        var text = new Rectangle(side + 5, 0, Math.Max(0, ClientSize.Width - side - 5), ClientSize.Height);
+        TextRenderer.DrawText(e.Graphics, Text, Font, text, Neon.Muted,
+            TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix);
+    }
+}
+
+class NeonButton : Button
+{
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        if (Enabled)
+        {
+            base.OnPaint(e);
+            return;
+        }
+        e.Graphics.Clear(Neon.Surface);
+        using (var pen = new Pen(Color.FromArgb(104, 131, 114)))
+            e.Graphics.DrawRectangle(pen, 0, 0, ClientSize.Width - 1, ClientSize.Height - 1);
+        TextRenderer.DrawText(e.Graphics, Text, Font, ClientRectangle, Neon.Muted,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+    }
+}
+
+sealed class OptionPicker : NeonButton
+{
+    int selectedIndex = -1;
+    internal readonly List<object> Items = new List<object>();
+    internal event EventHandler SelectedIndexChanged;
+    internal string Placeholder
+    {
+        set { if (selectedIndex < 0) Text = value + "  ▾"; }
+    }
+    internal int SelectedIndex
+    {
+        get { return selectedIndex; }
+        set
+        {
+            selectedIndex = value;
+            Text = Convert.ToString(SelectedItem) + "  ▾";
+            var changed = SelectedIndexChanged;
+            if (changed != null) changed(this, EventArgs.Empty);
+        }
+    }
+    internal object SelectedItem
+    {
+        get { return selectedIndex >= 0 && selectedIndex < Items.Count ? Items[selectedIndex] : null; }
+    }
+
+    internal OptionPicker()
+    {
+        TextAlign = ContentAlignment.MiddleLeft;
+        Text = "Selecione  ▾";
+    }
+
+    protected override void OnClick(EventArgs e)
+    {
+        base.OnClick(e);
+        if (Items.Count == 0) return;
+        var menu = new ContextMenuStrip();
+        menu.RenderMode = ToolStripRenderMode.System;
+        for (int i = 0; i < Items.Count; i++)
+        {
+            int index = i;
+            var entry = new ToolStripMenuItem(Convert.ToString(Items[i])) {
+                Checked = index == selectedIndex, ForeColor = Color.FromArgb(20, 40, 26)
+            };
+            entry.Click += (sender, args) => SelectedIndex = index;
+            menu.Items.Add(entry);
+        }
+        menu.Closed += (sender, args) => BeginInvoke((Action)menu.Dispose);
+        menu.Show(this, new Point(0, Height));
     }
 }
 
@@ -56,18 +171,26 @@ static class HardwareViews
 {
     static Label Note(string text)
     {
-        return new Label { Text = text, MaximumSize = new Size(630, 0), AutoSize = true, Margin = new Padding(3, 6, 3, 4) };
+        return new NeonLabel { Text = text, MaximumSize = new Size(630, 0), AutoSize = true, Margin = new Padding(3, 6, 3, 4) };
+    }
+
+    static Label Title(string text)
+    {
+        var title = Note(text);
+        title.Font = new Font("Segoe UI Semibold", 12);
+        title.Tag = "section-heading";
+        return title;
     }
 
     static Button Action(string text)
     {
-        return new Button { Text = text, AutoSize = true, Margin = new Padding(3, 8, 3, 4) };
+        return new NeonButton { Text = text, AutoSize = true, Margin = new Padding(3, 8, 3, 4) };
     }
 
     static FlowLayoutPanel Section()
     {
         return new FlowLayoutPanel {
-            Dock = DockStyle.Fill, Padding = new Padding(20), AutoScroll = true,
+            Dock = DockStyle.Fill, Padding = new Padding(20, 14, 20, 14), AutoScroll = true,
             FlowDirection = FlowDirection.TopDown, WrapContents = false
         };
     }
@@ -106,15 +229,15 @@ static class HardwareViews
         var load = Action("Ler ajustes da Pico");
         var save = Action("Aplicar na Pico");
         var state = Note("Clique em Ler ajustes da Pico para começar.");
-        var steady = new CheckBox { Text = "Desativar o efeito de piscar", AutoSize = true };
-        var dim = new CheckBox { Text = "Ajustar brilho do LED RGB externo", AutoSize = true };
+        var steady = new NeonCheckBox { Text = "Desativar o efeito de piscar", AutoSize = true };
+        var dim = new NeonCheckBox { Text = "Ajustar brilho do LED RGB externo", AutoSize = true };
         var brightness = new NumericUpDown { Minimum = 0, Maximum = 15, Width = 80, AccessibleName = "Brilho RGB" };
         var product = new TextBox { MaxLength = 31, Width = 260, AccessibleName = "Nome USB" };
         var vid = new TextBox { MaxLength = 4, Width = 90, AccessibleName = "VID em hexadecimal" };
         var pid = new TextBox { MaxLength = 4, Width = 90, AccessibleName = "PID em hexadecimal" };
-        var custom = new CheckBox { Text = "Usar VID e PID próprios", AutoSize = true };
-        var keyboard = new CheckBox { Text = "Ativar interface de teclado para OTP", AutoSize = true };
-        var curve = new CheckBox { Text = "Ativar curva secp256k1 para FIDO", AutoSize = true };
+        var custom = new NeonCheckBox { Text = "Usar VID e PID próprios", AutoSize = true };
+        var keyboard = new NeonCheckBox { Text = "Ativar interface de teclado para OTP", AutoSize = true };
+        var curve = new NeonCheckBox { Text = "Ativar curva secp256k1 para FIDO", AutoSize = true };
         var fields = Section();
         fields.Padding = Padding.Empty;
         fields.AutoScroll = false;
@@ -122,10 +245,10 @@ static class HardwareViews
         fields.AutoSize = true;
         fields.Enabled = false;
         fields.Controls.AddRange(new Control[] {
-            Note("LED da placa"), steady, Note("O LED integrado da Pico 2 não tem ajuste de brilho pelo firmware."),
-            Row(dim, brightness), Note("Identidade USB"),
+            Title("LED da placa"), steady, Note("O LED integrado da Pico 2 não tem ajuste de brilho pelo firmware."),
+            Row(dim, brightness), Title("Identidade USB"),
             Row(Note("Nome"), product), custom, Row(Note("VID"), vid, Note("PID"), pid),
-            Note("Opções avançadas"), keyboard, curve, save
+            Title("Opções avançadas"), keyboard, curve, save
         });
         SortedDictionary<byte, byte[]> original = null;
         Action usbAvailability = () => { vid.Enabled = custom.Checked; pid.Enabled = custom.Checked; };
@@ -203,7 +326,7 @@ static class HardwareViews
             catch (Exception error) { state.Text = "Leia novamente para conferir o estado da placa."; ShowError(owner, error); }
             finally { load.Enabled = true; }
         };
-        panel.Controls.AddRange(new Control[] { Note("LED, identidade USB e interfaces"), load, state, fields });
+        panel.Controls.AddRange(new Control[] { Title("LED, identidade USB e interfaces"), load, state, fields });
         return panel;
     }
 
@@ -211,14 +334,14 @@ static class HardwareViews
     {
         var panel = Section();
         var load = Action("Ler os quatro slots");
-        var selector = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 280, AccessibleName = "Slot OTP" };
-        var mode = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 280, AccessibleName = "Tipo de slot OTP" };
+        var selector = new OptionPicker { Width = 280, AccessibleName = "Slot OTP", Placeholder = "Leia os slots para selecionar" };
+        var mode = new OptionPicker { Width = 280, AccessibleName = "Tipo de slot OTP" };
         mode.Items.AddRange(new object[] { "Apagar slot", "Texto digitado", "HOTP digitado", "HMAC-SHA1 desafio/resposta", "Yubico OTP" });
         mode.SelectedIndex = 1;
         var secretLabel = Note("");
         var secret = new TextBox { UseSystemPasswordChar = true, Width = 280, AccessibleName = "Valor do slot OTP", MaxLength = 56 };
         var access = new TextBox { UseSystemPasswordChar = true, Width = 160, AccessibleName = "Código de acesso do slot", MaxLength = 12 };
-        var touch = new CheckBox { Text = "Exigir toque para desafio HMAC", Checked = true, AutoSize = true };
+        var touch = new NeonCheckBox { Text = "Exigir toque para desafio HMAC", Checked = true, AutoSize = true };
         var save = Action("Salvar alteração do slot");
         var state = Note("Leia os slots para começar.");
         bool[] slots = null;
@@ -276,7 +399,7 @@ static class HardwareViews
             }
         };
         panel.Controls.AddRange(new Control[] {
-            Note("Slots OTP da Pico"), load, state, selector, mode, secretLabel, secret, touch,
+            Title("Slots OTP da Pico"), load, state, selector, mode, secretLabel, secret, touch,
             Note("Código de acesso atual do slot (12 hexadecimais). Deixe vazio se não houver."), access, save
         });
         update();
@@ -306,7 +429,7 @@ static class HardwareViews
             finally { sync.Enabled = true; }
         };
         panel.Controls.AddRange(new Control[] {
-            Note("Provisionamento e diagnóstico"), read, status, sync,
+            Title("Provisionamento e diagnóstico"), read, status, sync,
             Note("Secure Boot e Secure Lock aparecem em modo de consulta. Ativá-los exige firmware assinado e um plano de recuperação.")
         });
         return panel;

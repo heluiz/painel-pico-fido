@@ -131,8 +131,8 @@ static class PicoPanel
                 FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true
             };
             var status = new Label { Width = 620, Height = 52, AccessibleName = "Estado do dispositivo" };
-            var refresh = new Button { Text = "Verificar conexão USB", AutoSize = true };
-            var manage = new Button { Text = "Abrir configurações do PIN", AutoSize = true };
+            var refresh = new NeonButton { Text = "Verificar conexão USB", AutoSize = true };
+            var manage = new NeonButton { Text = "Abrir configurações do PIN", AutoSize = true };
             var help = new Label {
                 Width = 620, Height = 90, Padding = new Padding(0, 10, 0, 0),
                 Text = "No Windows, abra Chave de segurança → Gerenciar e siga as instruções na tela. " +
@@ -150,9 +150,9 @@ static class PicoPanel
                     MessageBox.Show(form, error.Message, "Falha ao abrir Configurações");
                 }
             };
-            var chrome = new Button { Text = "Gerenciar credenciais da chave no Chrome", AutoSize = true };
-            var verify = new Button { Text = "Verificar UF2 do Pico FIDO 8.0", AutoSize = true };
-            var usb = new Button { Text = "Ver interfaces USB e modo BOOTSEL", AutoSize = true };
+            var chrome = new NeonButton { Text = "Gerenciar credenciais da chave no Chrome", AutoSize = true };
+            var verify = new NeonButton { Text = "Verificar UF2 do Pico FIDO 8.0", AutoSize = true };
+            var usb = new NeonButton { Text = "Ver interfaces USB e modo BOOTSEL", AutoSize = true };
             chrome.Click += (sender, e) => {
                 try {
                     Process.Start(new ProcessStartInfo("chrome.exe", "chrome://settings/securityKeys") { UseShellExecute = true });
@@ -173,17 +173,17 @@ static class PicoPanel
                     catch (UnauthorizedAccessException error) { MessageBox.Show(form, error.Message, "Falha ao ler arquivo"); }
                 }
             };
-            var oath = new Button { Text = "Listar contas TOTP e HOTP da Pico", AutoSize = true };
+            var oath = new NeonButton { Text = "Listar contas TOTP e HOTP da Pico", AutoSize = true };
             oath.Click += (sender, e) => {
                 try { MessageBox.Show(form, PicoOath.ListAccounts(), "Contas OATH"); }
                 catch (InvalidOperationException error) { MessageBox.Show(form, error.Message, "Contas OATH"); }
             };
-            var addTotp = new Button { Text = "Adicionar conta TOTP", AutoSize = true };
+            var addTotp = new NeonButton { Text = "Adicionar conta TOTP", AutoSize = true };
             addTotp.Click += (sender, e) => {
                 using (var dialog = new Form { Text = "Adicionar TOTP (SHA-1, 6 dígitos, 30 s)", ClientSize = new Size(440, 180), StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false })
                 using (var label = new TextBox { Width = 395, AccessibleName = "Nome da conta" })
                 using (var secret = new TextBox { Width = 395, UseSystemPasswordChar = true, AccessibleName = "Chave Base32" })
-                using (var save = new Button { Text = "Salvar na Pico", AutoSize = true, DialogResult = DialogResult.OK })
+                using (var save = new NeonButton { Text = "Salvar na Pico", AutoSize = true, DialogResult = DialogResult.OK })
                 {
                     var fields = new FlowLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(12), FlowDirection = FlowDirection.TopDown, WrapContents = false };
                     fields.Controls.AddRange(new Control[] { new Label { Text = "Nome da conta", AutoSize = true }, label, new Label { Text = "Chave Base32 fornecida pelo serviço", AutoSize = true }, secret, save });
@@ -195,7 +195,7 @@ static class PicoPanel
                     finally { secret.Clear(); }
                 }
             };
-            var generate = new Button { Text = "Gerar código TOTP", AutoSize = true };
+            var generate = new NeonButton { Text = "Gerar código TOTP", AutoSize = true };
             generate.Click += (sender, e) => {
                 try
                 {
@@ -206,8 +206,8 @@ static class PicoPanel
                         return;
                     }
                     using (var dialog = new Form { Text = "Escolha a conta TOTP", ClientSize = new Size(430, 120), StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false })
-                    using (var picker = new ComboBox { Left = 15, Top = 16, Width = 400, DropDownStyle = ComboBoxStyle.DropDownList, AccessibleName = "Conta TOTP" })
-                    using (var show = new Button { Left = 15, Top = 55, AutoSize = true, Text = "Mostrar código", DialogResult = DialogResult.OK })
+                    using (var picker = new OptionPicker { Left = 15, Top = 12, Width = 400, AccessibleName = "Conta TOTP" })
+                    using (var show = new NeonButton { Left = 15, Top = 55, AutoSize = true, Text = "Mostrar código", DialogResult = DialogResult.OK })
                     {
                         picker.Items.AddRange(accounts);
                         picker.SelectedIndex = 0;
@@ -236,15 +236,15 @@ static class PicoPanel
             tabs.TabPages.AddRange(new[] { daily, device, slots, advanced });
 
             var heading = new Label {
-                Dock = DockStyle.Top, Height = 62, Text = "PICO FIDO",
+                Dock = DockStyle.Top, Height = 56, Text = "PICO FIDO",
                 Padding = new Padding(23, 0, 0, 0), TextAlign = ContentAlignment.MiddleLeft,
                 Font = new Font("Consolas", 24, FontStyle.Bold)
             };
             form.Controls.Add(tabs);
             form.Controls.Add(heading);
             Neon.Style(form);
-            heading.ForeColor = Neon.Cyan;
-            heading.BackColor = Color.FromArgb(22, 14, 42);
+            heading.ForeColor = Neon.Accent;
+            heading.BackColor = Color.FromArgb(16, 33, 23);
             form.Shown += (sender, e) => update();
             if (args.Length == 1 && args[0] == "--smoke-ui")
             {
