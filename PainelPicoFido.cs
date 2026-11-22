@@ -90,6 +90,12 @@ static class PicoPanel
             return;
         }
 
+        if (args.Length == 2 && args[0] == "--oath")
+        {
+            try { File.WriteAllText(args[1], PicoOath.ListAccounts()); }
+            catch (InvalidOperationException error) { File.WriteAllText(args[1], error.Message); Environment.ExitCode = 1; }
+            return;
+        }
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
         using (var form = new Form())
@@ -146,7 +152,53 @@ static class PicoPanel
                     catch (UnauthorizedAccessException error) { MessageBox.Show(form, error.Message, "Falha ao ler arquivo"); }
                 }
             };
-            panel.Controls.AddRange(new Control[] { status, refresh, usb, manage, chrome, verify, help });
+            var oath = new Button { Text = "Listar contas TOTP e HOTP da Pico", AutoSize = true };
+            oath.Click += (sender, e) => {
+                try { MessageBox.Show(form, PicoOath.ListAccounts(), "Contas OATH"); }
+                catch (InvalidOperationException error) { MessageBox.Show(form, error.Message, "Contas OATH"); }
+            };
+            var addTotp = new Button { Text = "Adicionar conta TOTP", AutoSize = true };
+            addTotp.Click += (sender, e) => {
+                using (var dialog = new Form { Text = "Adicionar TOTP (SHA-1, 6 dígitos, 30 s)", ClientSize = new Size(440, 180), StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false })
+                using (var label = new TextBox { Width = 395, AccessibleName = "Nome da conta" })
+                using (var secret = new TextBox { Width = 395, UseSystemPasswordChar = true, AccessibleName = "Chave Base32" })
+                using (var save = new Button { Text = "Salvar na Pico", AutoSize = true, DialogResult = DialogResult.OK })
+                {
+                    var fields = new FlowLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(12), FlowDirection = FlowDirection.TopDown, WrapContents = false };
+                    fields.Controls.AddRange(new Control[] { new Label { Text = "Nome da conta", AutoSize = true }, label, new Label { Text = "Chave Base32 fornecida pelo serviço", AutoSize = true }, secret, save });
+                    dialog.Controls.Add(fields);
+                    dialog.AcceptButton = save;
+                    if (dialog.ShowDialog(form) != DialogResult.OK) return;
+                    try { MessageBox.Show(form, PicoOath.AddTotp(label.Text, secret.Text), "Cadastro OATH"); }
+                    catch (InvalidOperationException error) { MessageBox.Show(form, error.Message, "Cadastro OATH"); }
+                    finally { secret.Clear(); }
+                }
+            };
+            var generate = new Button { Text = "Gerar código TOTP", AutoSize = true };
+            generate.Click += (sender, e) => {
+                try
+                {
+                    string[] accounts = PicoOath.TotpNames();
+                    if (accounts.Length == 0)
+                    {
+                        MessageBox.Show(form, "Adicione uma conta TOTP primeiro.", "Gerar código");
+                        return;
+                    }
+                    using (var dialog = new Form { Text = "Escolha a conta TOTP", ClientSize = new Size(430, 120), StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false })
+                    using (var picker = new ComboBox { Left = 15, Top = 16, Width = 400, DropDownStyle = ComboBoxStyle.DropDownList, AccessibleName = "Conta TOTP" })
+                    using (var show = new Button { Left = 15, Top = 55, AutoSize = true, Text = "Mostrar código", DialogResult = DialogResult.OK })
+                    {
+                        picker.Items.AddRange(accounts);
+                        picker.SelectedIndex = 0;
+                        dialog.Controls.AddRange(new Control[] { picker, show });
+                        dialog.AcceptButton = show;
+                        if (dialog.ShowDialog(form) == DialogResult.OK)
+                            MessageBox.Show(form, PicoOath.CurrentCode((string)picker.SelectedItem), "Código TOTP");
+                    }
+                }
+                catch (InvalidOperationException error) { MessageBox.Show(form, error.Message, "Gerar código"); }
+            };
+            panel.Controls.AddRange(new Control[] { status, refresh, generate, addTotp, oath, manage, chrome, usb, verify, help });
             form.Controls.Add(panel);
             form.Shown += (sender, e) => update();
             Application.Run(form);
