@@ -63,6 +63,10 @@ static class Neon
 
 sealed class NeonLabel : Label
 {
+    internal NeonLabel()
+    {
+        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+    }
     protected override void OnPaint(PaintEventArgs e)
     {
         if (Enabled)
@@ -70,13 +74,18 @@ sealed class NeonLabel : Label
             base.OnPaint(e);
             return;
         }
-        TextRenderer.DrawText(e.Graphics, Text, Font, ClientRectangle, Neon.Muted,
-            TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
+        e.Graphics.Clear(BackColor);
+        using (var textBrush = new SolidBrush(Neon.Muted))
+            e.Graphics.DrawString(Text, Font, textBrush, ClientRectangle);
     }
 }
 
 sealed class NeonCheckBox : CheckBox
 {
+    internal NeonCheckBox()
+    {
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+    }
     protected override void OnPaint(PaintEventArgs e)
     {
         if (Enabled)
@@ -84,6 +93,7 @@ sealed class NeonCheckBox : CheckBox
             base.OnPaint(e);
             return;
         }
+        e.Graphics.Clear(BackColor);
         int side = Math.Max(13, (int)Math.Round(13 * e.Graphics.DpiX / 96));
         var box = new Rectangle(1, (ClientSize.Height - side) / 2, side - 1, side - 1);
         using (var pen = new Pen(Neon.Muted))
@@ -94,8 +104,9 @@ sealed class NeonCheckBox : CheckBox
                     new Point(box.Left + side / 2 - 1, box.Bottom - 2), new Point(box.Right - 2, box.Top + 2) });
         }
         var text = new Rectangle(side + 5, 0, Math.Max(0, ClientSize.Width - side - 5), ClientSize.Height);
-        TextRenderer.DrawText(e.Graphics, Text, Font, text, Neon.Muted,
-            TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix);
+        using (var textBrush = new SolidBrush(Neon.Muted))
+        using (var format = new StringFormat { LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap })
+            e.Graphics.DrawString(Text, Font, textBrush, text, format);
     }
 }
 
