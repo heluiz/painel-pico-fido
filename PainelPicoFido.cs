@@ -1,70 +1,217 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Management;
+using System.Text;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 static class PicoPanel
 {
     static string Detect()
     {
-        int devices = 0;
-        int ready = 0;
+        int hid;
+        int ready;
+        ReadDefaultUsb(new StringBuilder(), out hid, out ready);
+        if (hid == 0)
+            return "Nenhuma interface HID com VID/PID padrão encontrada. Consulte o diagnóstico para verificar leitores CCID.";
+        if (hid > 1)
+            return "Várias interfaces HID com VID/PID padrão encontradas. Confira os códigos no diagnóstico.";
+        return ready == 1 ? "Interface HID com VID/PID padrão reconhecida pelo Windows." :
+            "Interface HID encontrada, mas sem confirmação de funcionamento pelo Windows.";
+    }
+
+    static void ReadDefaultUsb(StringBuilder output, out int hid, out int ready)
+    {
+        hid = ready = 0;
         using (var query = new ManagementObjectSearcher(
-            "SELECT PNPDeviceID, ConfigManagerErrorCode FROM Win32_PnPEntity WHERE Present = TRUE AND PNPDeviceID LIKE 'HID%VID_2E8A&PID_10FE&MI_00%'"))
+            "SELECT Name, PNPDeviceID, ConfigManagerErrorCode FROM Win32_PnPEntity WHERE Present = TRUE AND PNPDeviceID LIKE '%VID_2E8A&PID_10FE%'"))
         using (var results = query.Get())
+        foreach (ManagementObject device in results)
+        using (device)
         {
-            foreach (ManagementObject device in results)
+            object code = device["ConfigManagerErrorCode"];
+            output.AppendLine(string.Format("• {0} (código Windows: {1})",
+                device["Name"] ?? "Interface sem nome", code ?? "indisponível"));
+            string id = device["PNPDeviceID"] as string;
+            if (id != null && id.StartsWith("HID", StringComparison.OrdinalIgnoreCase) &&
+                id.IndexOf("VID_2E8A&PID_10FE&MI_00", StringComparison.OrdinalIgnoreCase) >= 0)
             {
-                using (device)
-                {
-                    devices++;
-                    if (device["ConfigManagerErrorCode"] is uint &&
-                        (uint)device["ConfigManagerErrorCode"] == 0)
-                        ready++;
-                }
+                hid++;
+                if (code is uint && (uint)code == 0) ready++;
             }
         }
-                if (devices == 0)
+    }
+
+    internal static string CcidStatus(int count)
+    {
+        if (count == 0) return "Nenhum leitor compatível pelo nome. A interface CCID pode estar desativada ou com nome personalizado.";
+        if (count == 1) return "1 leitor candidato encontrado pelo nome. A identidade da chave não foi verificada.";
+        return count + " leitores candidatos encontrados pelo nome. A identidade das chaves não foi verificada.";
+    }
+
+    static readonly string[] DiagnosticTitles = {
+        "Interfaces USB com VID/PID padrão (2E8A:10FE)", "Leitores CCID", "Volumes BOOTSEL"
+    };
+
+    static string[] DiagnosticSections()
+    {
+        return new[] {
+            ReadDiagnostic(() => {
+                var usb = new StringBuilder();
+                int hid, ready;
+                ReadDefaultUsb(usb, out hid, out ready);
+                return usb.Length == 0 ? "Nenhuma interface com o identificador padrão encontrada." : usb.ToString().TrimEnd();
+            }),
+            ReadDiagnostic(() => CcidStatus(PicoCard.CountCandidates())),
+            ReadDiagnostic(ReadBootselVolumes)
+        };
+    }
+
+    static string ReadBootselVolumes()
+    {
+        int candidates = 0;
+        foreach (DriveInfo drive in DriveInfo.GetDrives())
         {
             try
             {
-                PicoSettings.Configuration();
-                return "Pico FIDO detectada via leitor CCID. Confira o VID/PID na aba LED e USB.";
+                if (drive.DriveType == DriveType.Removable && drive.IsReady &&
+                    drive.VolumeLabel == "RP2350" &&
+                    File.Exists(Path.Combine(drive.Name, "INFO_UF2.TXT")))
+                    candidates++;
             }
-            catch (InvalidOperationException) { return "Nenhuma Pico FIDO detectada. Conecte a placa por USB."; }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
         }
-        if (ready == 0) return "Pico detectada, mas o Windows informou um erro no dispositivo.";
-        return ready == 1 ? "Interface FIDO da Pico reconhecida pelo Windows." :
-            ready + " interfaces FIDO Pico encontradas. Deixe conectada apenas a chave desejada.";
+        return candidates == 0 ? "Nenhum volume RP2350 identificado." :
+            candidates + " volume(s) com rótulo RP2350 e arquivo INFO_UF2.TXT.";
     }
 
     static string Diagnostics()
     {
-        var output = new System.Text.StringBuilder();
-        using (var query = new ManagementObjectSearcher(
-            "SELECT Name, ConfigManagerErrorCode FROM Win32_PnPEntity WHERE Present = TRUE AND PNPDeviceID LIKE '%VID_2E8A&PID_10FE%'"))
-        using (var results = query.Get())
-        foreach (ManagementObject device in results)
-        using (device)
-            output.AppendLine(string.Format("{0} (código Windows: {1})",
-                device["Name"], device["ConfigManagerErrorCode"]));
-
-        foreach (DriveInfo drive in DriveInfo.GetDrives())
-        {
-            try {
-                if (drive.DriveType == DriveType.Removable && drive.IsReady &&
-                    drive.VolumeLabel == "RP2350" &&
-                    File.Exists(Path.Combine(drive.Name, "INFO_UF2.TXT")))
-                    output.AppendLine("RP2350 em modo BOOTSEL: " + drive.Name);
-            } catch (IOException) { }
-              catch (UnauthorizedAccessException) { }
-        }
-        return output.Length == 0 ? "Nenhuma interface PicoKey ou unidade RP2350 encontrada." : output.ToString();
+        var output = new StringBuilder();
+        string[] sections = DiagnosticSections();
+        for (int i = 0; i < sections.Length; i++)
+            output.AppendLine(DiagnosticTitles[i]).AppendLine(sections[i]).AppendLine();
+        return output.ToString();
     }
 
-    static string CheckFirmware(string path)
+    internal static string ReadDiagnostic(Func<string> read)
+    {
+        try { return read(); }
+        catch (Exception error)
+        {
+            if (!(error is ManagementException || error is UnauthorizedAccessException ||
+                error is InvalidOperationException || error is IOException ||
+                error is System.Runtime.InteropServices.COMException)) throw;
+            return "Consulta indisponível: " + error.Message;
+        }
+    }
+
+    static void RunDiagnostics(bool smoke)
+    {
+        using (var form = new Form())
+        {
+            form.Text = "Painel Pico FIDO — Diagnóstico";
+            form.ClientSize = new Size(700, 510);
+            form.MinimumSize = new Size(480, 340);
+            form.StartPosition = FormStartPosition.CenterScreen;
+            form.Padding = new Padding(16);
+            form.Font = new Font("Segoe UI", 11);
+            var title = new Label {
+                Dock = DockStyle.Top, Height = 50,
+                Text = "Diagnóstico somente leitura\r\nConsulte as interfaces reconhecidas pelo Windows."
+            };
+            var sections = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
+            var values = new TextBox[DiagnosticTitles.Length];
+            for (int i = 0; i < values.Length; i++)
+            {
+                sections.RowStyles.Add(new RowStyle(SizeType.Percent, i == 0 ? 44 : 28));
+                var group = new GroupBox { Dock = DockStyle.Fill, Text = DiagnosticTitles[i], Padding = new Padding(8) };
+                values[i] = new TextBox {
+                    Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical,
+                    AccessibleName = DiagnosticTitles[i], Text = "Aguardando consulta."
+                };
+                group.Controls.Add(values[i]);
+                sections.Controls.Add(group, 0, i);
+            }
+            var actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 50, WrapContents = false };
+            var refresh = new NeonButton { AutoSize = true, Text = "Atualizar diagnóstico" };
+            actions.Controls.AddRange(new Control[] { refresh, FirmwareButton(form) });
+            refresh.Click += async (sender, e) => {
+                refresh.Enabled = false;
+                foreach (TextBox value in values) value.Text = "Consultando o Windows…";
+                try
+                {
+                    string[] results = await Task.Run((Func<string[]>)DiagnosticSections);
+                    if (form.IsDisposed) return;
+                    for (int i = 0; i < values.Length; i++) values[i].Text = results[i];
+                }
+                finally { if (!form.IsDisposed) refresh.Enabled = true; }
+            };
+            form.Controls.AddRange(new Control[] { sections, actions, title });
+            Neon.Style(form);
+            if (smoke) form.Shown += (sender, e) => form.BeginInvoke((Action)form.Close);
+            Application.Run(form);
+        }
+    }
+
+    static void ShowAccounts(Form owner)
+    {
+        var accounts = PicoOath.Accounts();
+        if (accounts.Length == 0)
+        {
+            MessageBox.Show(owner, "Nenhuma conta OATH cadastrada.", "Contas OATH");
+            return;
+        }
+        using (var dialog = new Form {
+            Text = "Contas OATH", ClientSize = new Size(560, 430), MinimumSize = new Size(360, 240),
+            StartPosition = FormStartPosition.CenterParent, Padding = new Padding(12), Font = owner.Font
+        })
+        {
+            var hint = new Label { Dock = DockStyle.Top, Text = "Filtrar por nome ou tipo", Height = 26 };
+            var filter = new TextBox { Dock = DockStyle.Top, AccessibleName = "Filtrar contas OATH" };
+            var rows = new ListBox { Dock = DockStyle.Fill, AccessibleName = "Contas OATH encontradas" };
+            var count = new Label { Dock = DockStyle.Bottom, Height = 30 };
+            Action update = () => {
+                string query = filter.Text.Trim();
+                rows.BeginUpdate();
+                try
+                {
+                    rows.Items.Clear();
+                    foreach (var account in accounts)
+                        if (account.Key.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            account.Value.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0)
+                            rows.Items.Add(account.Key + " — " + account.Value);
+                }
+                finally { rows.EndUpdate(); }
+                count.Text = rows.Items.Count + " de " + accounts.Length + " contas";
+            };
+            filter.TextChanged += (sender, e) => update();
+            dialog.Controls.AddRange(new Control[] { rows, count, filter, hint });
+            Neon.Style(dialog);
+            update();
+            dialog.ShowDialog(owner);
+        }
+    }
+
+    static NeonButton FirmwareButton(Form form)
+    {
+        var verify = new NeonButton { Text = "Verificar arquivo UF2", AutoSize = true };
+        verify.Click += (sender, e) => {
+            using (var picker = new OpenFileDialog { Filter = "Firmware UF2 (*.uf2)|*.uf2" })
+            {
+                if (picker.ShowDialog(form) != DialogResult.OK) return;
+                try { MessageBox.Show(form, CheckFirmware(picker.FileName), "Verificação do firmware"); }
+                catch (IOException error) { MessageBox.Show(form, error.Message, "Falha ao ler arquivo"); }
+                catch (UnauthorizedAccessException error) { MessageBox.Show(form, error.Message, "Falha ao ler arquivo"); }
+            }
+        };
+        return verify;
+    }
+
+    internal static string CheckFirmware(string path)
     {
         const string expected = "97116184551AD3C7510225E3E114F4E36FF09F50BCE1F4E79A72A5C7F778C168";
         using (var input = File.OpenRead(path))
@@ -119,6 +266,13 @@ static class PicoPanel
         }
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
+        bool managementSmoke = args.Length == 1 && args[0] == "--smoke-ui";
+        if (!managementSmoke && (args.Length != 1 || args[0] != "--gerenciar"))
+        {
+            RunDiagnostics(args.Length == 1 && args[0] == "--smoke-diagnostico");
+            return;
+        }
+
         using (var form = new Form())
         {
             form.Text = "Painel Pico FIDO";
@@ -151,7 +305,7 @@ static class PicoPanel
                 }
             };
             var chrome = new NeonButton { Text = "Gerenciar credenciais da chave no Chrome", AutoSize = true };
-            var verify = new NeonButton { Text = "Verificar UF2 do Pico FIDO 8.0", AutoSize = true };
+            var verify = FirmwareButton(form);
             var usb = new NeonButton { Text = "Ver interfaces USB e modo BOOTSEL", AutoSize = true };
             chrome.Click += (sender, e) => {
                 try {
@@ -164,18 +318,9 @@ static class PicoPanel
                 try { MessageBox.Show(form, Diagnostics(), "Diagnóstico USB"); }
                 catch (ManagementException error) { MessageBox.Show(form, error.Message, "Falha no diagnóstico"); }
             };
-            verify.Click += (sender, e) => {
-                using (var picker = new OpenFileDialog { Filter = "Firmware UF2 (*.uf2)|*.uf2" })
-                {
-                    if (picker.ShowDialog(form) != DialogResult.OK) return;
-                    try { MessageBox.Show(form, CheckFirmware(picker.FileName), "Verificação do firmware"); }
-                    catch (IOException error) { MessageBox.Show(form, error.Message, "Falha ao ler arquivo"); }
-                    catch (UnauthorizedAccessException error) { MessageBox.Show(form, error.Message, "Falha ao ler arquivo"); }
-                }
-            };
             var oath = new NeonButton { Text = "Listar contas TOTP e HOTP da Pico", AutoSize = true };
             oath.Click += (sender, e) => {
-                try { MessageBox.Show(form, PicoOath.ListAccounts(), "Contas OATH"); }
+                try { ShowAccounts(form); }
                 catch (InvalidOperationException error) { MessageBox.Show(form, error.Message, "Contas OATH"); }
             };
             var addTotp = new NeonButton { Text = "Adicionar conta TOTP", AutoSize = true };
@@ -245,8 +390,8 @@ static class PicoPanel
             Neon.Style(form);
             heading.ForeColor = Neon.Accent;
             heading.BackColor = Color.FromArgb(16, 33, 23);
-            form.Shown += (sender, e) => update();
-            if (args.Length == 1 && args[0] == "--smoke-ui")
+            if (!managementSmoke) form.Shown += (sender, e) => update();
+            if (managementSmoke)
             {
                 using (var timer = new Timer { Interval = 200 })
                 {

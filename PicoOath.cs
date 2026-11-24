@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -6,7 +6,7 @@ using System.Text;
 
 static class PicoOath
 {
-    static string Access(Func<IntPtr, uint, byte[], string> action)
+    static T Access<T>(Func<IntPtr, uint, byte[], T> action)
     {
         return PicoCard.Open((card, protocol) => {
             var selected = PicoCard.Send(card, protocol, 0, 0xA4, 4, 0, 7, 0xA0, 0, 0, 5, 0x27, 0x21, 1);
@@ -28,13 +28,16 @@ static class PicoOath
         });
     }
 
+    internal static KeyValuePair<string, string>[] Accounts()
+    {
+        return Access((card, protocol, data) => ReadAccounts(data).ToArray());
+    }
+
     public static string ListAccounts()
     {
-        return Access((card, protocol, data) => {
-            var entries = ReadAccounts(data);
-            return entries.Count == 0 ? "Nenhuma conta OATH cadastrada." :
-                string.Join(Environment.NewLine, entries.Select(a => a.Key + ": " + a.Value));
-        });
+        var entries = Accounts();
+        return entries.Length == 0 ? "Nenhuma conta OATH cadastrada." :
+            string.Join(Environment.NewLine, entries.Select(a => a.Key + ": " + a.Value));
     }
 
     public static string AddTotp(string label, string base32)
@@ -78,12 +81,7 @@ static class PicoOath
 
     public static string[] TotpNames()
     {
-        string[] names = null;
-        Access((card, protocol, data) => {
-            names = ReadAccounts(data).Where(a => a.Key == "TOTP").Select(a => a.Value).ToArray();
-            return "";
-        });
-        return names;
+        return Accounts().Where(a => a.Key == "TOTP").Select(a => a.Value).ToArray();
     }
 
     public static string CurrentCode(string label)
