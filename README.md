@@ -6,6 +6,8 @@ Painel Windows com tema verde de alto contraste para Raspberry Pi Pico 2 com Pic
 
 Abra `PainelPicoFido.exe` e clique em **Atualizar diagnóstico**. O relatório mostra separadamente as interfaces com VID/PID padrão, os leitores CCID candidatos pelo nome e os volumes identificados como RP2350 em modo BOOTSEL. Cada consulta pode retornar seu próprio erro. O painel enumera informações do Windows sem abrir sessão com a chave, enviar comandos à Pico ou pedir PIN. Um leitor candidato não comprova a identidade da chave e um VID/PID personalizado pode não aparecer na seção USB.
 
+O botão **Verificar arquivo UF2** confere o tamanho e SHA-256 de um arquivo local do Pico FIDO 8.0.
+
 A opção `--diagnostics caminho.txt` gera o mesmo relatório em arquivo.
 
 ## Gerenciamento
@@ -17,7 +19,7 @@ Para abrir as ferramentas de gerenciamento existentes, execute `.\PainelPicoFido
 - **Slots OTP**: quatro slots com texto digitado, HOTP, HMAC-SHA1 ou Yubico OTP. Informe o código de acesso atual se o slot estiver protegido.
 - **Avançado**: firmware, memória, consulta de Secure Boot e Secure Lock, e sincronização do relógio.
 
-Em LED e USB, leia os ajustes, edite e aplique. Pressione BOOTSEL quando a placa pedir confirmação e reconecte depois de gravar. Use somente VID/PID atribuídos a você. O gerenciamento requer uma única Pico com interface CCID ativa.
+Em LED e USB, leia os ajustes, edite e confira a lista de campos alterados antes de aplicar. Em Slots OTP, a leitura exibe a ocupação dos quatro slots lado a lado. A lista de contas OATH pode ser filtrada por nome ou tipo. Pressione BOOTSEL quando a placa pedir confirmação e reconecte depois de gravar. Use somente VID/PID atribuídos a você. O gerenciamento requer uma única Pico com interface CCID ativa.
 
 O painel verifica o firmware UF2 oficial. Não grava firmware nem programa fusíveis.
 
@@ -31,7 +33,7 @@ No PowerShell, na pasta do projeto:
 
 ## Testar sem hardware
 
-Execute `.\tests\Testar.ps1` para validar os estados de leitores e o relatório parcial com falhas simuladas. Depois de compilar o painel, os argumentos `--smoke-diagnostico` e `--smoke-ui` abrem e fecham as telas sem disparar consultas ao Windows ou à chave.
+Execute `.\tests\Testar.ps1` para validar os estados de leitores, falhas de consulta simuladas, o resumo de alterações de configuração e a rejeição de arquivos UF2 inválidos. Depois de compilar o painel, os argumentos `--smoke-diagnostico` e `--smoke-ui` abrem e fecham as telas sem disparar consultas ao Windows ou à chave.
 
 ## Referências
 

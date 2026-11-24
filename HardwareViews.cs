@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
@@ -234,6 +234,25 @@ static class HardwareViews
         data[tag] = bytes;
     }
 
+    internal static string[] ChangedSettings(SortedDictionary<byte, byte[]> original, SortedDictionary<byte, byte[]> updated)
+    {
+        var names = new Dictionary<byte, string> {
+            { 0, "VID/PID" }, { 5, "Brilho RGB" }, { 6, "Modo do LED" }, { 9, "Nome USB" },
+            { 10, "Curva secp256k1" }, { 11, "Interface de teclado OTP" }
+        };
+        var changes = new List<string>();
+        foreach (byte tag in original.Keys.Union(updated.Keys).OrderBy(key => key))
+        {
+            byte[] before, after;
+            original.TryGetValue(tag, out before);
+            updated.TryGetValue(tag, out after);
+            if (before != null && after != null && before.SequenceEqual(after)) continue;
+            string name;
+            changes.Add(names.TryGetValue(tag, out name) ? name : "Campo " + tag.ToString("X2"));
+        }
+        return changes.ToArray();
+    }
+
     internal static Control Device(Form owner)
     {
         var panel = Section();
@@ -309,11 +328,15 @@ static class HardwareViews
                 return;
             }
             var updated = new SortedDictionary<byte, byte[]>(original);
-            Flag(updated, 6, 2, 8, steady.Checked, 0);
+            int currentLedOptions = Option(original, 6, 0);
+            if (steady.Checked != ((currentLedOptions & 8) != 0))
+                Flag(updated, 6, 2, 8, steady.Checked, 0);
             if (dim.Enabled)
             {
-                Flag(updated, 6, 2, 2, dim.Checked, 0);
-                if (dim.Checked) updated[5] = new[] { (byte)brightness.Value };
+                bool wasDimmable = (currentLedOptions & 2) != 0;
+                if (dim.Checked != wasDimmable) Flag(updated, 6, 2, 2, dim.Checked, 0);
+                if (dim.Checked && (!wasDimmable || brightness.Value != Math.Min(15, Option(original, 5, 15))))
+                    updated[5] = new[] { (byte)brightness.Value };
             }
             if (name.Length == 0) updated.Remove(9);
             else updated[9] = Encoding.ASCII.GetBytes(name + "\0");
@@ -323,8 +346,14 @@ static class HardwareViews
                 Flag(updated, 11, 1, 8, keyboard.Checked, 31);
             if (curve.Checked != ((Option(original, 10, 0) & 8) != 0))
                 Flag(updated, 10, 4, 8, curve.Checked, 0);
+            string[] changes = ChangedSettings(original, updated);
+            if (changes.Length == 0)
+            {
+                state.Text = "Nenhuma alteração para aplicar.";
+                return;
+            }
             bool identityChanged = Option(updated, 0, 0x2E8A10FE) != Option(original, 0, 0x2E8A10FE);
-            string instructions = "Ao confirmar a janela, pressione brevemente BOOTSEL na Pico quando ela pedir presença. Reconecte a placa depois de gravar.";
+            string instructions = "Campos a gravar: " + string.Join(", ", changes) + "\r\n\r\nAo confirmar a janela, pressione brevemente BOOTSEL na Pico quando ela pedir presença. Reconecte a placa depois de gravar.";
             if (identityChanged) instructions += "\r\n\r\nTrocar VID/PID pode mudar o driver do Windows. Use apenas identificadores atribuídos a você.";
             if (MessageBox.Show(owner, instructions, "Aplicar configurações", MessageBoxButtons.OKCancel) != DialogResult.OK) return;
             fields.Enabled = load.Enabled = false;
@@ -335,7 +364,7 @@ static class HardwareViews
                 state.Text = "Gravação confirmada pela Pico. Reconecte a placa e leia os ajustes novamente.";
             }
             catch (Exception error) { state.Text = "Leia novamente para conferir o estado da placa."; ShowError(owner, error); }
-            finally { load.Enabled = true; }
+            finally { original = null; load.Enabled = true; }
         };
         panel.Controls.AddRange(new Control[] { Title("LED, identidade USB e interfaces"), load, state, fields });
         return panel;
@@ -355,6 +384,7 @@ static class HardwareViews
         var touch = new NeonCheckBox { Text = "Exigir toque para desafio HMAC", Checked = true, AutoSize = true };
         var save = Action("Salvar alteração do slot");
         var state = Note("Leia os slots para começar.");
+        var occupancy = Note("Slots 1 a 4: aguardando leitura.");
         bool[] slots = null;
         Action update = () => {
             string[] hints = {
@@ -373,6 +403,7 @@ static class HardwareViews
         load.Click += async (sender, e) => {
             load.Enabled = save.Enabled = false;
             slots = null;
+            occupancy.Text = "Consultando os quatro slots…";
             try
             {
                 var result = await Task.Run((Func<bool[]>)PicoSettings.Slots);
@@ -381,10 +412,12 @@ static class HardwareViews
                 for (int i = 0; i < result.Length; i++)
                     selector.Items.Add("Slot " + (i + 1) + (result[i] ? " • ocupado" : " • livre"));
                 slots = result;
+                occupancy.Text = string.Join("  |  ", result.Select((occupied, index) =>
+                    "Slot " + (index + 1) + ": " + (occupied ? "ocupado" : "livre")));
                 selector.SelectedIndex = Math.Max(previous, 0);
                 state.Text = "Selecione o slot e o tipo.";
             }
-            catch (Exception error) { state.Text = "Não foi possível consultar os slots."; ShowError(owner, error); }
+            catch (Exception error) { occupancy.Text = "Ocupação indisponível."; state.Text = "Não foi possível consultar os slots."; ShowError(owner, error); }
             finally { load.Enabled = true; update(); }
         };
         save.Click += async (sender, e) => {
@@ -410,7 +443,7 @@ static class HardwareViews
             }
         };
         panel.Controls.AddRange(new Control[] {
-            Title("Slots OTP da Pico"), load, state, selector, mode, secretLabel, secret, touch,
+            Title("Slots OTP da Pico"), load, state, occupancy, selector, mode, secretLabel, secret, touch,
             Note("Código de acesso atual do slot (12 hexadecimais). Deixe vazio se não houver."), access, save
         });
         update();
