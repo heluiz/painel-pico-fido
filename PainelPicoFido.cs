@@ -1,67 +1,132 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Management;
+using System.Text;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 static class PicoPanel
 {
     static string Detect()
     {
-        int devices = 0;
-        int ready = 0;
+        int hid;
+        int ready;
+        ReadDefaultUsb(new StringBuilder(), out hid, out ready);
+        if (hid == 0)
+            return "Nenhuma interface HID com VID/PID padrão encontrada. Consulte o diagnóstico para verificar leitores CCID.";
+        if (hid > 1)
+            return "Várias interfaces HID com VID/PID padrão encontradas. Confira os códigos no diagnóstico.";
+        return ready == 1 ? "Interface HID com VID/PID padrão reconhecida pelo Windows." :
+            "Interface HID encontrada, mas sem confirmação de funcionamento pelo Windows.";
+    }
+
+    static void ReadDefaultUsb(StringBuilder output, out int hid, out int ready)
+    {
+        hid = ready = 0;
         using (var query = new ManagementObjectSearcher(
-            "SELECT PNPDeviceID, ConfigManagerErrorCode FROM Win32_PnPEntity WHERE Present = TRUE AND PNPDeviceID LIKE 'HID%VID_2E8A&PID_10FE&MI_00%'"))
+            "SELECT Name, PNPDeviceID, ConfigManagerErrorCode FROM Win32_PnPEntity WHERE Present = TRUE AND PNPDeviceID LIKE '%VID_2E8A&PID_10FE%'"))
         using (var results = query.Get())
+        foreach (ManagementObject device in results)
+        using (device)
         {
-            foreach (ManagementObject device in results)
+            object code = device["ConfigManagerErrorCode"];
+            output.AppendLine(string.Format("• {0} (código Windows: {1})",
+                device["Name"] ?? "Interface sem nome", code ?? "indisponível"));
+            string id = device["PNPDeviceID"] as string;
+            if (id != null && id.StartsWith("HID", StringComparison.OrdinalIgnoreCase) &&
+                id.IndexOf("VID_2E8A&PID_10FE&MI_00", StringComparison.OrdinalIgnoreCase) >= 0)
             {
-                using (device)
-                {
-                    devices++;
-                    if (device["ConfigManagerErrorCode"] is uint &&
-                        (uint)device["ConfigManagerErrorCode"] == 0)
-                        ready++;
-                }
+                hid++;
+                if (code is uint && (uint)code == 0) ready++;
             }
         }
-                if (devices == 0)
-        {
-            try
-            {
-                PicoSettings.Configuration();
-                return "Pico FIDO detectada via leitor CCID. Confira o VID/PID na aba LED e USB.";
-            }
-            catch (InvalidOperationException) { return "Nenhuma Pico FIDO detectada. Conecte a placa por USB."; }
-        }
-        if (ready == 0) return "Pico detectada, mas o Windows informou um erro no dispositivo.";
-        return ready == 1 ? "Interface FIDO da Pico reconhecida pelo Windows." :
-            ready + " interfaces FIDO Pico encontradas. Deixe conectada apenas a chave desejada.";
+    }
+
+    internal static string CcidStatus(int count)
+    {
+        if (count == 0) return "Nenhum leitor compatível pelo nome. A interface CCID pode estar desativada ou com nome personalizado.";
+        if (count == 1) return "1 leitor candidato encontrado pelo nome. A identidade da chave não foi verificada.";
+        return count + " leitores candidatos encontrados pelo nome. A identidade das chaves não foi verificada.";
     }
 
     static string Diagnostics()
     {
-        var output = new System.Text.StringBuilder();
-        using (var query = new ManagementObjectSearcher(
-            "SELECT Name, ConfigManagerErrorCode FROM Win32_PnPEntity WHERE Present = TRUE AND PNPDeviceID LIKE '%VID_2E8A&PID_10FE%'"))
-        using (var results = query.Get())
-        foreach (ManagementObject device in results)
-        using (device)
-            output.AppendLine(string.Format("{0} (código Windows: {1})",
-                device["Name"], device["ConfigManagerErrorCode"]));
+        var output = new StringBuilder();
+        AppendDiagnostic(output, "Interfaces USB com VID/PID padrão (2E8A:10FE)", () => {
+            var usb = new StringBuilder();
+            int hid, ready;
+            ReadDefaultUsb(usb, out hid, out ready);
+            return usb.Length == 0 ? "Nenhuma interface com o identificador padrão encontrada." : usb.ToString().TrimEnd();
+        });
+        AppendDiagnostic(output, "Leitores CCID", () => CcidStatus(PicoCard.CountCandidates()));
+        AppendDiagnostic(output, "Volumes BOOTSEL", () => {
+            int candidates = 0;
+            foreach (DriveInfo drive in DriveInfo.GetDrives())
+            {
+                try
+                {
+                    if (drive.DriveType == DriveType.Removable && drive.IsReady &&
+                        drive.VolumeLabel == "RP2350" &&
+                        File.Exists(Path.Combine(drive.Name, "INFO_UF2.TXT")))
+                        candidates++;
+                }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
+            return candidates == 0 ? "Nenhum volume RP2350 identificado." :
+                candidates + " volume(s) com rótulo RP2350 e arquivo INFO_UF2.TXT.";
+        });
+        return output.ToString();
+    }
 
-        foreach (DriveInfo drive in DriveInfo.GetDrives())
+    internal static void AppendDiagnostic(StringBuilder output, string title, Func<string> read)
+    {
+        output.AppendLine(title);
+        try { output.AppendLine(read()); }
+        catch (Exception error)
         {
-            try {
-                if (drive.DriveType == DriveType.Removable && drive.IsReady &&
-                    drive.VolumeLabel == "RP2350" &&
-                    File.Exists(Path.Combine(drive.Name, "INFO_UF2.TXT")))
-                    output.AppendLine("RP2350 em modo BOOTSEL: " + drive.Name);
-            } catch (IOException) { }
-              catch (UnauthorizedAccessException) { }
+            if (!(error is ManagementException || error is UnauthorizedAccessException ||
+                error is InvalidOperationException || error is IOException ||
+                error is System.Runtime.InteropServices.COMException)) throw;
+            output.AppendLine("Consulta indisponível: " + error.Message);
         }
-        return output.Length == 0 ? "Nenhuma interface PicoKey ou unidade RP2350 encontrada." : output.ToString();
+        output.AppendLine();
+    }
+
+    static void RunDiagnostics(bool smoke)
+    {
+        using (var form = new Form())
+        {
+            form.Text = "Painel Pico FIDO — Diagnóstico";
+            form.ClientSize = new Size(700, 510);
+            form.MinimumSize = new Size(400, 300);
+            form.StartPosition = FormStartPosition.CenterScreen;
+            form.Padding = new Padding(16);
+            form.Font = new Font("Segoe UI", 11);
+            var title = new Label {
+                Dock = DockStyle.Top, Height = 50,
+                Text = "Diagnóstico somente leitura\r\nConsulte as interfaces reconhecidas pelo Windows."
+            };
+            var report = new TextBox {
+                Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical,
+                AccessibleName = "Resultado do diagnóstico", Text = "Clique em Atualizar diagnóstico para consultar."
+            };
+            var refresh = new NeonButton { Dock = DockStyle.Bottom, Height = 42, Text = "Atualizar diagnóstico" };
+            refresh.Click += async (sender, e) => {
+                refresh.Enabled = false;
+                report.Text = "Consultando o Windows…";
+                string result = await Task.Run((Func<string>)Diagnostics);
+                if (form.IsDisposed) return;
+                report.Text = result;
+                refresh.Enabled = true;
+            };
+            form.Controls.AddRange(new Control[] { report, refresh, title });
+            Neon.Style(form);
+            if (smoke) form.Shown += (sender, e) => form.BeginInvoke((Action)form.Close);
+            Application.Run(form);
+        }
     }
 
     static string CheckFirmware(string path)
@@ -119,6 +184,13 @@ static class PicoPanel
         }
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
+        bool managementSmoke = args.Length == 1 && args[0] == "--smoke-ui";
+        if (!managementSmoke && (args.Length != 1 || args[0] != "--gerenciar"))
+        {
+            RunDiagnostics(args.Length == 1 && args[0] == "--smoke-diagnostico");
+            return;
+        }
+
         using (var form = new Form())
         {
             form.Text = "Painel Pico FIDO";
@@ -245,8 +317,8 @@ static class PicoPanel
             Neon.Style(form);
             heading.ForeColor = Neon.Accent;
             heading.BackColor = Color.FromArgb(16, 33, 23);
-            form.Shown += (sender, e) => update();
-            if (args.Length == 1 && args[0] == "--smoke-ui")
+            if (!managementSmoke) form.Shown += (sender, e) => update();
+            if (managementSmoke)
             {
                 using (var timer = new Timer { Interval = 200 })
                 {

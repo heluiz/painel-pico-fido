@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Linq;
 using System.Runtime.InteropServices;
 
@@ -27,18 +27,36 @@ static class PicoCard
         return response.Take((int)size).ToArray();
     }
 
+    static string[] ListCandidates(IntPtr context)
+    {
+        const int noReaders = unchecked((int)0x8010002E);
+        uint count = 0;
+        int result = SCardListReaders(context, null, null, ref count);
+        if (result == noReaders) return new string[0];
+        Check(result);
+        var names = new char[count];
+        result = SCardListReaders(context, null, names, ref count);
+        if (result == noReaders) return new string[0];
+        Check(result);
+        return new string(names).Split('\0').Where(name =>
+            name.StartsWith("Pol Henarejos ", StringComparison.OrdinalIgnoreCase)).ToArray();
+    }
+
+    internal static int CountCandidates()
+    {
+        IntPtr context;
+        Check(SCardEstablishContext(0, IntPtr.Zero, IntPtr.Zero, out context));
+        try { return ListCandidates(context).Length; }
+        finally { SCardReleaseContext(context); }
+    }
+
     internal static T Open<T>(Func<IntPtr, uint, T> action)
     {
         IntPtr context;
         Check(SCardEstablishContext(0, IntPtr.Zero, IntPtr.Zero, out context));
         try
         {
-            uint count = 0;
-            Check(SCardListReaders(context, null, null, ref count));
-            var names = new char[count];
-            Check(SCardListReaders(context, null, names, ref count));
-            var readers = new string(names).Split('\0').Where(n =>
-                n.StartsWith("Pol Henarejos ", StringComparison.OrdinalIgnoreCase)).ToArray();
+            var readers = ListCandidates(context);
             if (readers.Length != 1)
                 throw new InvalidOperationException("Conecte exatamente uma PicoKey com interface CCID.");
             IntPtr card;
